@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Containers: Cgroups and Namespaces</title>
+<meta charset="utf-8">
+<style>
+
+@import url(https://fonts.googleapis.com/css?family=Yanone+Kaffeesatz);
+@import url(https://fonts.googleapis.com/css?family=Droid+Serif:400,700,400italic);
+@import url(https://fonts.googleapis.com/css?family=Ubuntu+Mono:400,700,400italic);
+
+body {
+    font-family: 'Droid Serif';
+}
+h1, h2, h3 {
+    font-family: 'Yanone Kaffeesatz';
+    font-weight: normal;
+}
+.remark-code, .remark-inline-code {
+    font-family: 'Ubuntu Mono';
+}
+
+img[alt=hypervisors] {
+    width: 100%;
+}
+img[alt=obiwan] {
+    width: 75%;
+}
+
+</style>
+</head>
+<body>
+<textarea id="source">
+
+class: center, middle
+
+# Containers: Cgroups and Namespaces
+
+---
+
+# Agenda
+
+ - Overview/History
+ - Cgroups
+ - Namespaces
+ - Demos along the way
+
+---
+
+# Hardware Virtualization
+
+**Pros:**
+
+ - It works
+     - x86_64 virtualization is very mature
+     - a solid decade of production use
+ - Strong isolation
+ - You can run any OS/binary (elf/mach-o/win32/...)
+ - Bring your own kernel
+
+**Cons:**
+
+ - You are virtualizing the hardware
+     - QEMU floppy disk controller
+ - Boot time
+ - Resources are not fully utilized
+ - Overhead with running two operating systems
+
+---
+
+# OS Virtualization
+
+**Pros:**
+
+ - Less overhead (it's just a virtual syscall table)
+ - No boot time
+ - Resources are better utilized
+
+**Cons:**
+
+ - Weak isolation
+ - Can only run binaries for the kernel you are running
+ - With Linux's implementation security was not a primary design consideration
+
+---
+
+class: center, middle
+
+![hypervisors](https://www.conetix.com.au/media/uploads/2014/08/20/cloud-and-container-based-hosting1.png)
+
+---
+
+# What is a "container" really?
+
+**Prior art:**
+
+ - Virtual memory
+     - Isolation of memory address space
+     - Techniques date back to 40s/50s
+ - chroot
+     - Syscall that redefines root for a given process
+     - Allows for rudimentary isolation of file system
+     - Originated with Bill Joy in 7th Edition Unix ~1982
+     - Not meant as a security feature but people used it as a way to run untrusted code
+
+---
+
+class: center, middle
+
+# chroot demo
+
+???
+
+```bash
+python & # just run something in the background
+
+mkdir -p /testchroot/{bin,lib,lib64}
+rsync -a /bin/ /testchroot/bin/
+rsync -a /lib/ /testchroot/lib/
+rsync -a /lib64/ /testchroot/lib64/
+
+chroot /testchroot /bin/bash
+
+ps aux # this doesn't work since we haven't mounted /proc
+mkdir /proc
+mount -t proc proc /proc
+ps aux # now it works!
+kill -9 python_pid
+
+umount /testchroot/proc
+chroot --userspec=vagrant:vagrant /testchroot /bin/bash
+ps aux
+mount -t proc proc /proc
+```
+
+---
+
+<br><br>
+**Prior art (cont):**
+
+ - Jails/Zones
+     - Introduced in 2000 with FreeBSD 4.0 and 2004 with Solaris 10
+     - Full process isolation
+     - Security was a primary design consideration
+ - OpenVZ
+     - Custom Linux kernel
+     - Still supported/maintained
+ - cgroups/namespaces based runtimes:
+     - LXC
+     - Docker (libcontainer, used to be based on LXC)
+     - Warden (used to be based on LXC)
+     - Garden backends:
+         - Garden Linux
+         - Guardian (runC based)
+     - systemd-nspawn
+     - LMCTFY (eol, moved to libcontainer)
+     - rkt (appc spec)
+     - runC (libcontainer, open container spec)
+
+---
+
+# Cgroups/Namespaces
+
+ - These are orthogonal features
+ - They can be used independently
+ - There is no container_t
+
+<br>
+```
+freebsd$ grep -r 'struct jail' *
+sys/sys/jail.h:struct jail {
+```
+
+```
+illumos$ grep -r 'struct zone' *
+usr/src/uts/common/sys/zone.h:typedef struct zone {
+```
+
+```
+linux$ grep -r 'struct container' *
+drivers/acpi/container.c:static int acpi_container_offline(struct container_dev *cdev)
+drivers/acpi/container.c:	struct container_dev *cdev;
+drivers/base/container.c:	struct container_dev *cdev = to_container_dev(dev);
+include/linux/container.h:struct container_dev {
+include/linux/container.h:	int (*offline)(struct container_dev *cdev);
+include/linux/container.h:static inline struct container_dev *to_container_dev(struct device *dev)
+include/linux/container.h:	return container_of(dev, struct container_dev, dev);
+```
+
+---
+
+class: center, middle
+
+![obiwan](https://i.imgflip.com/wsbwx.jpg)
+
+---
+
+# Cgroups
+
+ - Created at Google
+ - Previously know as process containers
+ - Allows for metering and limiting of resources for groups of processes
+     - memory
+     - CPU
+     - disk IO
+     - network IO
+     - devices
+ - Each subsystem has it's own tree of nodes
+ - Each process belongs to a single node in each subsystem tree
+ - The default node is the root of the tree
+ - Implemented via the cgroup filesystem
+     - /sys/fs/cgroup/ (systemd)
+     - /proc/cgroups
+     - /proc/<pid>/cgroup
+ - Memory:
+     - soft limits (used for reclaiming under memory pressure)
+     - hard limits (will trigger oom killer)
+ - BlockIO:
+     - Limit read/write rates
+
+---
+
+class: center, middle
+
+# cgroups demo
+
+???
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+
+#define MB 1048576 // 2**20
+
+int main()
+{
+    unsigned int count = 0;
+    char *p;
+
+    for (;;) {
+        printf("allocating 1MB\n");
+        p = malloc(MB);
+        if (p == NULL) {
+            printf("failure to malloc at %dMB\n", count);
+            return 1;
+        }
+        memset(p, 0, MB);
+        count++;
+        printf("allocated %dMB\n", count);
+        sleep(1);
+    }
+    return 0;
+}
+```
+
+```bash
+cat > allocate.c
+gcc -o allocate allocate.c
+./allocate
+
+# in another terminal
+cd /sys/fs/cgroup/
+ls -la
+cd memory
+ls -la
+mkdir pivotal
+cd pivotal
+ls -la
+echo 5242880 > memory.limit_in_bytes # 5 MB
+ps aux | grep allocate
+echo allocate_pid > tasks
+
+# in other terminal
+apt-get install --yes cgroup-bin
+lscgroup | grep memory
+cgexec -g memory:/pivotal ./allocate
+
+```
+
+```bash
+apt-get install --yes iotop
+iotop -o # left three times
+
+# create a 3 GB file
+dd if=/dev/zero of=demo bs=1M count=3000
+
+mkdir /sys/fs/cgroup/blkio/pivotal
+cd !$
+
+ls -la /dev/sda*
+echo "8:0 5242880" > blkio.throttle.read_bps_device
+
+# clear caches
+sync
+echo 3 > /proc/sys/vm/drop_caches
+
+# baseline
+dd if=demo of=/dev/null bs=1M count=3000
+
+# clear caches
+sync
+echo 3 > /proc/sys/vm/drop_caches
+
+# rate limited
+cgexec -g blkio:/pivotal dd if=demo of=/dev/null bs=1M count=3000
+```
+
+---
+
+# Namespaces
+
+ - Implemented via syscalls:
+     - clone w/ CLONE_NEW* flags (copy namespace + new process)
+     - unshare - (create namespace)
+     - setns - (set namespace)
+ - Materialized in `/proc/<pid>/ns`
+ - Types of namespaces:
+     - NS - mount points
+     - PID - Process IDs
+     - USER - UIDs
+     - NET - Network Stack
+     - UTS - Hostname
+     - IPC - SysV IPC
+
+---
+
+class: center, middle
+
+# namespaces demo
+
+???
+
+```bash
+ps aux
+ifconfig -a
+id
+ls -la /proc/self/ns
+unshare --net --pid --user --fork --mount-proc
+ls -la /proc/self/ns
+ps aux
+ifconfig -a
+id
+```
+</textarea>
+<script src="https://gnab.github.io/remark/downloads/remark-latest.min.js">
+</script>
+<script>
+var slideshow = remark.create();
+</script>
+</body>
+</html>
