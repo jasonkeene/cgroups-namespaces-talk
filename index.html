@@ -328,6 +328,10 @@ cgexec -g blkio:/cf dd if=demo of=/dev/null bs=1M count=3000
      - UTS - Hostname
      - IPC - SysV IPC
 
+???
+
+unfortunately named NS
+
 ---
 
 class: center, middle
@@ -346,6 +350,34 @@ ls -la /proc/self/ns
 ps aux
 ifconfig -a
 id
+```
+
+```bash
+# create our network namespace
+ip netns add demo-namespace
+
+# create two veth links and move one to our namespace
+ip link add tap-ns type veth peer name tap-local
+ip link set tap-ns netns demo-namespace
+
+# configure our default namespace's veth
+ip addr add 10.0.0.1/24 dev tap-local
+ip link set dev tap-local up
+
+# configure our demo namespace's veth
+ip netns exec demo-namespace ip addr add 10.0.0.2/24 dev tap-ns
+ip netns exec demo-namespace ip link set dev tap-ns up
+
+# add default route for our namespace
+ip netns exec demo-namespace ip route add default via 10.0.0.1 dev tap-ns
+
+# enable kernel to forward packets from one interface to another
+echo 1 > /proc/sys/net/ipv4/ip_forward
+
+# add nat for 10.0.0.0/24
+iptables -t nat -A POSTROUTING -s 10.0.0.0/24 -o eth0 -j MASQUERADE
+
+ip netns exec demo-namespace bash
 ```
 
 ---
