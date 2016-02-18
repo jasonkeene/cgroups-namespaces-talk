@@ -26,6 +26,10 @@ img[alt=hypervisors] {
 img[alt=obiwan] {
     width: 75%;
 }
+span.wow {
+    display: block;
+    text-align: center;
+}
 
 </style>
 </head>
@@ -211,7 +215,7 @@ class: center, middle
  - Implemented via the cgroup filesystem
      - /sys/fs/cgroup/ (systemd)
      - /proc/cgroups
-     - /proc/<pid>/cgroup
+     - /proc/self/cgroup
  - Memory:
      - soft limits (used for reclaiming under memory pressure)
      - hard limits (will trigger oom killer)
@@ -265,8 +269,8 @@ cd /sys/fs/cgroup/
 ls -la
 cd memory
 ls -la
-mkdir pivotal
-cd pivotal
+mkdir cf
+cd cf
 ls -la
 echo 5242880 > memory.limit_in_bytes # 5 MB
 ps aux | grep allocate
@@ -275,7 +279,7 @@ echo allocate_pid > tasks
 # in other terminal
 apt-get install --yes cgroup-bin
 lscgroup | grep memory
-cgexec -g memory:/pivotal ./allocate
+cgexec -g memory:/cf ./allocate
 
 ```
 
@@ -286,7 +290,7 @@ iotop -o # left three times
 # create a 3 GB file
 dd if=/dev/zero of=demo bs=1M count=3000
 
-mkdir /sys/fs/cgroup/blkio/pivotal
+mkdir /sys/fs/cgroup/blkio/cf
 cd !$
 
 ls -la /dev/sda*
@@ -304,7 +308,7 @@ sync
 echo 3 > /proc/sys/vm/drop_caches
 
 # rate limited
-cgexec -g blkio:/pivotal dd if=demo of=/dev/null bs=1M count=3000
+cgexec -g blkio:/cf dd if=demo of=/dev/null bs=1M count=3000
 ```
 
 ---
@@ -343,6 +347,49 @@ ps aux
 ifconfig -a
 id
 ```
+
+---
+
+# Wow, This Stuff is Pretty Powerful!
+
+<br>
+
+.wow[![wow](http://i.imgur.com/Mj2iT9d.gif)]
+
+<br>
+
+ - You can limit usage of system/kernel resources by individual process
+ - Group processes together for communication or security
+ - Effectively control how the process sees the world
+
+---
+
+# The Hard Truth
+
+ - You do not want to do this yourself.
+ - It is error prone and there are a lot of technicallities to get right.
+ - Security isn't guaranteed.
+ - Isolating thousands of app instances accross hundreds machines is non-trivial.
+ - What happens when a machine goes down, who makes sure your app is still running?
+
+---
+
+# CF comes to the Rescue
+
+ - It takes care of all of this for you.
+ - You're apps run inside containers on Garden.
+ - They are isolated from each other.
+ - They are scheduled onto cells and get rescheduled when cells go down.
+ - And you don't have to worry about any of it.
+
+---
+
+class: center, middle
+
+# Thanks! Questions?
+
+github.com/jasonkeene
+
 </textarea>
 <script src="https://gnab.github.io/remark/downloads/remark-latest.min.js">
 </script>
